@@ -83,15 +83,15 @@ def main(mode):
         'preprocess': preprocess_pipeline,
         'surprisal': heldout_surprisal
     }
-    print(mode)
+    print("Mode: {x}".format(mode=mode))
     func = mode_to_func[mode]
     func()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run analysis.')
-    parser.add_argument('--mode', default='extract_reals', type=str,
-                        help='Extract real parameters for each language')
+    parser.add_argument('--mode', default='preprocess', type=str,
+                        help='Preprpcoess each lexicon')
 
     args = vars(parser.parse_args())
 

@@ -538,7 +538,6 @@ df_japanese = read_data("../data/processed/japanese/reals/japanese_with_mps_4pho
 
 nrow(df_japanese)
 
-
 ## Now normalize probabilities and compute expected homophones per wordform
 df_japanese = df_japanese %>% 
   normalize_probabilities() %>%
@@ -1214,7 +1213,7 @@ output %>%
 
 output$model
 output$comparison
-    
+
 ```
 
 
