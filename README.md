@@ -2,7 +2,7 @@
 
 This repository contains code and data for a forthcoming paper:
 
-> Trott, S., Bergen, B. (2021). Whose efficiency? Frequent wordforms are less ambiguous than their phonotactics predicts.
+> Trott, S., Bergen, B. (2021). Languages are efficient, but for whom?
 
 Specifically, for a given lexicon (contained in `data/raw`), the code can be used to:
 
