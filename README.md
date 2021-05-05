@@ -10,6 +10,7 @@ Specifically, for a given lexicon (contained in `data/raw`), the code can be use
 - Compute the **phonotactic probability** of each wordform using a phonotactic model (see `src/preprocessor.py` and `src.generative_model.py`).  
 - Calculate the **homophony delta**, i.e., the difference between a wordform's *actual* number of homophones and how many it should have on account of its phonotactics (see `analyses/delta.Rmd`).  
 
+Please contact me (sttrott at ucsd dot edu) if you have any trouble accessing the data or using the code.
 
 ## Using the code
 
