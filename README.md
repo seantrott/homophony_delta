@@ -27,4 +27,6 @@ Once these lexica have been preprocessed, you can calculate phonotactic surprisa
 python main.py --mode=surprisal
 ```
 
+## Running the analysis
 
+The analyses can all be run by knitting the `.Rmd` file in `analyses`. (An already-knit `.html` file is also included.)
