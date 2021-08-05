@@ -269,18 +269,32 @@ df_english %>%
 
 ```
 
-We then merge with frequency data.
+We then merge with data for frequency of each individual lemma. (We also calculate entropy over senses in the process.)
 
 ```{r}
-df_subtlex = read_csv("../data/frequency/english/SUBTLEXusfrequencyabove1.csv")
-nrow(df_subtlex)
-df_subtlex$Word = tolower(df_subtlex$Word)
+df_english_lemmas = read_delim("../data/frequency/english/lemmas.csv", delim = "\\",
+                               quote = "")
+nrow(df_english_lemmas)
+
+df_english_lemmas = df_english_lemmas %>%
+  mutate(freq_adjusted = Cob + 1) %>%
+  group_by(PhonDISC) %>%
+  mutate(total_frequency = sum(freq_adjusted),
+         relative_frequency = freq_adjusted / total_frequency)
+
+df_entropy = df_english_lemmas %>%
+  group_by(PhonDISC) %>%
+  summarise(entropy = -sum(relative_frequency * log(relative_frequency)),
+            total_frequency = mean(total_frequency))
 
 df_merged_english = df_english %>%
-  inner_join(df_subtlex, on = "Word")
+  # inner_join(df_entropy, by = "PhonDISC")
+  inner_join(df_entropy, by = "PhonDISC")
+
 nrow(df_merged_english)
 
-df_merged_english$frequency = df_merged_english$Lg10WF
+df_merged_english$frequency = log10(df_merged_english$total_frequency)
+
 ```
 
 
@@ -295,6 +309,7 @@ df_merged_english %>%
 
 ```
 
+
 And finally, we can run the regression and visualize model coefficients:
 
 ```{r}
@@ -307,7 +322,6 @@ output %>%
 
 output$model
 output$comparison
-
 
 ```
 
@@ -324,25 +338,6 @@ df_merged_english %>%
 ### Calculate Sense Entropy
 
 ```{r}
-
-df_english_lemmas = read_delim("../data/frequency/english/lemmas.csv", delim = "\\",
-                               quote = "")
-nrow(df_english_lemmas)
-
-df_english_lemmas = df_english_lemmas %>%
-  mutate(freq_adjusted = Cob + 1) %>%
-  group_by(PhonDISC) %>%
-  mutate(total_frequency = sum(freq_adjusted),
-         relative_frequency = freq_adjusted / total_frequency)
-
-df_entropy = df_english_lemmas %>%
-  group_by(PhonDISC) %>%
-  summarise(entropy = -sum(relative_frequency * log(relative_frequency)),
-            total_frequency = mean(total_frequency))
-
-df_merged_english = df_merged_english %>%
-  # inner_join(df_entropy, by = "PhonDISC")
-  inner_join(df_entropy, by = "PhonDISC")
 
 nrow(filter(df_merged_english, num_homophones == 1))
 
@@ -380,18 +375,32 @@ df_dutch %>%
 
 ```
 
-We then merge with frequency data.
+We then merge with data for frequency of each individual lemma. (We also calculate entropy over senses in the process.)
 
 ```{r}
-df_subtlex = read_delim("../data/frequency/dutch/SUBTLEX-NL.txt", delim="\t")
-nrow(df_subtlex)
-df_subtlex$Word = tolower(df_subtlex$Word)
+df_dutch_lemmas = read_delim("../data/frequency/dutch/lemmas.csv", delim = "\\")
+
+nrow(df_dutch_lemmas)
+df_dutch_lemmas = df_dutch_lemmas %>%
+  mutate(freq_adjusted = Inl + 1) %>%
+  group_by(PhonDISC) %>%
+  mutate(total_frequency = sum(freq_adjusted),
+         relative_frequency = freq_adjusted / total_frequency)
+
+df_entropy = df_dutch_lemmas %>%
+  group_by(PhonDISC) %>%
+  summarise(entropy = -sum(relative_frequency * log(relative_frequency)),
+            total_frequency = mean(total_frequency))
+
 
 df_merged_dutch = df_dutch %>%
-  inner_join(df_subtlex, on = "Word") 
+  # inner_join(df_entropy, by = "PhonDISC")
+  inner_join(df_entropy, by = "PhonDISC")
+
 nrow(df_merged_dutch)
 
-df_merged_dutch$frequency = df_merged_dutch$Lg10WF
+df_merged_dutch$frequency = log10(df_merged_dutch$total_frequency)
+
 
 ```
 
@@ -425,7 +434,6 @@ output$comparison
 ```
 
 
-
 Directly contrast the relationships:
 
 ```{r}
@@ -434,29 +442,9 @@ df_merged_dutch %>%
 ```
 
 
-
-
 ### Calculate Sense Entropy
 
 ```{r}
-df_dutch_lemmas = read_delim("../data/frequency/dutch/lemmas.csv", delim = "\\")
-
-nrow(df_dutch_lemmas)
-df_dutch_lemmas = df_dutch_lemmas %>%
-  mutate(freq_adjusted = Inl + 1) %>%
-  group_by(PhonDISC) %>%
-  mutate(total_frequency = sum(freq_adjusted),
-         relative_frequency = freq_adjusted / total_frequency)
-
-df_entropy = df_dutch_lemmas %>%
-  group_by(PhonDISC) %>%
-  summarise(entropy = -sum(relative_frequency * log(relative_frequency)))
-
-
-df_merged_dutch = df_merged_dutch %>%
-  inner_join(df_entropy, by = "PhonDISC")
-nrow(df_merged_dutch)
-
 nrow(filter(df_merged_dutch, num_homophones == 1))
 
 model_full = lm(data = filter(df_merged_dutch, num_homophones == 1),
@@ -493,21 +481,35 @@ df_german %>%
   
 ```
 
-We then merge with frequency data.
+
+We then merge with data for frequency of each individual lemma. (We also calculate entropy over senses in the process.)
 
 ```{r}
-df_freq = read_csv("../data/frequency/german/SUBTLEX-DE.csv")
-nrow(df_freq)
-# df_freq$Word = tolower(df_freq$Word)
+df_german_lemmas = read_delim("../data/frequency/german/lemmas.csv", delim = "\\")
+nrow(df_german_lemmas)
 
-# log10 frequency (+ 1). SHould be analogous to measures from English.
-df_freq$Lg10WF = log10(df_freq$FREQcount + 1)
+df_german_lemmas = df_german_lemmas %>%
+  mutate(freq_adjusted = Mann + 1) %>%
+  group_by(PhonDISC) %>%
+  mutate(total_frequency = sum(freq_adjusted),
+         relative_frequency = freq_adjusted / total_frequency)
+
+df_entropy = df_german_lemmas %>%
+  group_by(PhonDISC) %>%
+  summarise(entropy = -sum(relative_frequency * log(relative_frequency)),
+            total_frequency = mean(total_frequency))
 
 df_merged_german = df_german %>%
-  inner_join(df_freq, on = "Word") 
+  # inner_join(df_entropy, by = "PhonDISC")
+  inner_join(df_entropy, by = "PhonDISC")
+
 nrow(df_merged_german)
-df_merged_german$frequency = df_merged_german$Lg10WF
+
+df_merged_german$frequency = log10(df_merged_german$total_frequency)
+
+
 ```
+
 
 
 Now we can visualize the outcome in a variety of ways:
@@ -535,8 +537,6 @@ output$comparison
 
 ```
 
-
-
 Directly contrast the relationships:
 
 ```{r}
@@ -549,24 +549,6 @@ df_merged_german %>%
 ### Calculate Sense Entropy
 
 ```{r}
-df_german_lemmas = read_delim("../data/frequency/german/lemmas.csv", delim = "\\")
-nrow(df_german_lemmas)
-
-df_german_lemmas = df_german_lemmas %>%
-  mutate(freq_adjusted = Mann + 1) %>%
-  group_by(PhonDISC) %>%
-  mutate(total_frequency = sum(freq_adjusted),
-         relative_frequency = freq_adjusted / total_frequency)
-
-df_entropy = df_german_lemmas %>%
-  group_by(PhonDISC) %>%
-  summarise(entropy = -sum(relative_frequency * log(relative_frequency)))
-
-
-df_merged_german = df_merged_german %>%
-  inner_join(df_entropy, by = "PhonDISC")
-nrow(df_merged_german)
-
 nrow(filter(df_merged_german, num_homophones == 1))
 model_full = lm(data = filter(df_merged_german, num_homophones == 1),
                 delta ~ entropy + frequency + num_sylls_est + normalized_surprisal)
@@ -578,6 +560,7 @@ model_reduced = lm(data = filter(df_merged_german, num_homophones ==1),
 
 anova(model_reduced, model_full)
 ```
+
 
 
 ## French
@@ -1446,4 +1429,339 @@ output$comparison
 ```
 
 
+
+# Supplementary 2: Dealing with collinearity
+
+The three predictors (frequency, #syllables, and surprisal) are all correlated. The correlation between the latter two is addressed by using Normalized Surprisal instead of Surprisal. But this leaves the correlation between frequency and #syllables and betwee frequency and surprisal. 
+
+Collinearity between predictors can sometimes lead to strange coefficient estimates (even while not affecting overall model fit). There are several ways that researchers try to account for potential collinearity. As a first step, researchers can calculate the variance inflation factor. If the VIF is sufficiently high, that suggests that collinearity might be present. 
+
+Below, we calculate the VIF for the main model for all languages. We see that the VIF scores from the complete model for all languages are all below a maximum of 1.43 (in French). This is reassuring.
+
+```{r}
+library(car)
+m = lm(data = df_merged_english,
+       delta ~ frequency + num_sylls_est + normalized_surprisal)
+vif(m)
+max(vif(m))
+
+m = lm(data = df_merged_german,
+       delta ~ frequency + num_sylls_est + normalized_surprisal)
+vif(m)
+max(vif(m))
+
+m = lm(data = df_merged_dutch,
+       delta ~ frequency + num_sylls_est + normalized_surprisal)
+vif(m)
+max(vif(m))
+
+m = lm(data = df_japanese_merged,
+       delta ~ frequency + num_sylls_est + normalized_surprisal)
+vif(m)
+max(vif(m))
+
+m = lm(data = df_french,
+       delta ~ frequency + num_sylls_est + normalized_surprisal)
+vif(m)
+max(vif(m))
+
+m = lm(data = df_mandarin_merged,
+       delta ~ frequency + num_sylls_est + normalized_surprisal)
+vif(m)
+max(vif(m))
+```
+
+
+## Supplementary 3: Zipf's law across languages
+
+Here, we check whether the original finding (i.e., frequent words are more ambiguous) is indeed significant across languages.
+
+```{r}
+m = lm(data = df_merged_english,
+       num_homophones ~ frequency + num_sylls_est + normalized_surprisal)
+summary(m)
+
+m = lm(data = df_merged_german,
+       num_homophones ~ frequency + num_sylls_est + normalized_surprisal)
+summary(m)
+
+m = lm(data = df_merged_dutch,
+       num_homophones ~ frequency + num_sylls_est + normalized_surprisal)
+summary(m)
+
+m = lm(data = df_japanese_merged,
+       num_homophones ~ frequency + num_sylls_est + normalized_surprisal)
+summary(m)
+
+m = lm(data = df_french,
+       num_homophones ~ frequency + num_sylls_est + normalized_surprisal)
+summary(m)
+
+m = lm(data = df_mandarin_merged,
+       num_homophones ~ frequency + num_sylls_est + normalized_surprisal)
+summary(m)
+```
+
+
+```{r}
+m = glm(data = df_merged_english,
+       num_homophones ~ frequency + num_sylls_est + normalized_surprisal,
+       family = poisson())
+summary(m)
+
+m = glm(data = df_merged_german,
+       num_homophones ~ frequency + num_sylls_est + normalized_surprisal,
+       family = poisson())
+summary(m)
+
+m = glm(data = df_merged_dutch,
+       num_homophones ~ frequency + num_sylls_est + normalized_surprisal,
+       family = poisson())
+summary(m)
+
+m = glm(data = df_japanese_merged,
+       num_homophones ~ frequency + num_sylls_est + normalized_surprisal,
+       family = poisson())
+summary(m)
+
+m = glm(data = df_french,
+       num_homophones ~ frequency + num_sylls_est + normalized_surprisal,
+       family = poisson())
+summary(m)
+
+m = glm(data = df_mandarin_merged,
+       num_homophones ~ frequency + num_sylls_est + normalized_surprisal,
+       family = poisson())
+summary(m)
+```
+
+
+## Supplementary 4: Using SUBTLEX for German, Dutch, and English
+
+
+## English
+
+First, we load and process the data.
+
+```{r}
+## setwd("/Users/seantrott/Dropbox/UCSD/Research/Ambiguity/Evolution/homophony_delta/analyses")
+df_english = read_data("../data/processed/english/reals/english_with_mps_5phone_holdout.csv")
+
+nrow(df_english)
+
+## Now normalize probabilities and compute expected homophones per wordform
+df_english = df_english %>% 
+  normalize_probabilities() %>%
+  compute_expected_homophones()
+
+## Double-check that this equals correct amount in lexicon
+df_english %>%
+  group_by(num_sylls_est) %>%
+  summarise(total = sum(k + 1),
+            correct_total = mean(M))
+
+
+```
+
+We then merge with frequency data.
+
+```{r}
+df_subtlex = read_csv("../data/frequency/english/SUBTLEXusfrequencyabove1.csv")
+nrow(df_subtlex)
+df_subtlex$Word = tolower(df_subtlex$Word)
+
+df_merged_english = df_english %>%
+  inner_join(df_subtlex, on = "Word")
+nrow(df_merged_english)
+
+df_merged_english$frequency = df_merged_english$Lg10WF
+```
+
+
+Now we can visualize the outcome in a variety of ways:
+
+```{r}
+df_merged_english %>%
+  plot_comparison()
+
+df_merged_english %>%
+  plot_bins(n = 20, column = "frequency", label = "Binned frequency")
+
+```
+
+
+And finally, we can run the regression and visualize model coefficients:
+
+```{r}
+
+output = df_merged_english %>% 
+  run_regression()
+
+output %>%
+  plot_outcome()
+
+output$model
+output$comparison
+
+```
+
+
+Directly contrast the relationships:
+
+```{r}
+df_merged_english %>%
+  plot_contrast(bins = 20)
+```
+
+
+
+## Dutch
+
+First, we load and process the data.
+
+```{r}
+df_dutch = read_data("../data/processed/dutch/reals/dutch_with_mps_5phone_holdout.csv")
+nrow(df_dutch)
+
+## Now normalize probabilities and compute expected homophones per wordform
+df_dutch = df_dutch %>% 
+  normalize_probabilities() %>%
+  compute_expected_homophones()
+
+## Double-check that this equals correct amount in lexicon
+df_dutch %>%
+  group_by(num_sylls_est) %>%
+  summarise(total = sum(k + 1),
+            correct_total = mean(M))
+
+
+```
+
+We then merge with frequency data.
+
+```{r}
+df_subtlex = read_delim("../data/frequency/dutch/SUBTLEX-NL.txt", delim="\t")
+nrow(df_subtlex)
+df_subtlex$Word = tolower(df_subtlex$Word)
+
+df_merged_dutch = df_dutch %>%
+  inner_join(df_subtlex, on = "Word") 
+nrow(df_merged_dutch)
+
+df_merged_dutch$frequency = df_merged_dutch$Lg10WF
+
+```
+
+
+
+Now we can visualize the outcome in a variety of ways:
+
+```{r}
+
+df_merged_dutch %>%
+  plot_comparison()
+
+df_merged_dutch %>%
+  plot_bins(n = 20, column = "frequency", label = "Binned frequency")
+
+
+```
+
+And finally, we can run the regression and visualize model coefficients:
+
+```{r}
+output = df_merged_dutch %>% 
+  run_regression()
+
+output %>%
+  plot_outcome()
+
+output$model
+output$comparison
+
+```
+
+
+
+Directly contrast the relationships:
+
+```{r}
+df_merged_dutch %>%
+  plot_contrast(bins = 20)
+```
+
+
+
+## German
+
+
+```{r}
+df_german = read_data("../data/processed/german/reals/german_with_mps_5phone_holdout.csv")
+
+nrow(df_german)
+
+## Now normalize probabilities and compute expected homophones per wordform
+df_german = df_german %>% 
+  normalize_probabilities() %>%
+  compute_expected_homophones()
+
+## Double-check that this equals correct amount in lexicon
+df_german %>%
+  group_by(num_sylls_est) %>%
+  summarise(total = sum(k + 1),
+            correct_total = mean(M))
+
+  
+```
+
+
+We then merge with frequency data.
+
+```{r}
+df_freq = read_csv("../data/frequency/german/SUBTLEX-DE.csv")
+nrow(df_freq)
+# df_freq$Word = tolower(df_freq$Word)
+
+# log10 frequency (+ 1). SHould be analogous to measures from English.
+df_freq$Lg10WF = log10(df_freq$FREQcount + 1)
+
+df_merged_german = df_german %>%
+  inner_join(df_freq, on = "Word") 
+nrow(df_merged_german)
+df_merged_german$frequency = df_merged_german$Lg10WF
+```
+
+
+Now we can visualize the outcome in a variety of ways:
+
+```{r}
+df_merged_german %>%
+  plot_comparison()
+
+df_merged_german %>%
+  plot_bins(n = 20, column = "frequency", label = "Binned frequency")
+
+```
+
+And finally, we can run the regression and visualize model coefficients:
+
+```{r}
+output = df_merged_german %>% 
+  run_regression()
+
+output %>%
+  plot_outcome()
+
+output$model
+output$comparison
+
+```
+
+
+Directly contrast the relationships:
+
+```{r}
+df_merged_german %>%
+  plot_contrast(bins = 20)
+```
 
