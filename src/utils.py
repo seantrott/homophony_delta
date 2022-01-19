@@ -14,14 +14,17 @@ from tqdm import tqdm
 ### Utility function
 def get_config_dict(config, language):
 
+    n = dict(config.LANGUAGES_N)[language]
     return {'language': language,
             'phon_column': config.PHON_COLUMN[language],
             'word_column': config.WORD_COLUMN[language],
             'vowels': config.VOWEL_SETS[language],
             'match_on': config.MODEL_INFO['match_on'],
             'phonetic_remappings': config.PHONETIC_REMAPPINGS[language],
-            'n': config.MODEL_INFO['n'],
+            'n': n, # Updated this
             'smoothing': config.MODEL_INFO['smoothing']}
+
+
 
 
 ### Utility function

@@ -25,8 +25,10 @@ LANGUAGES_N = [
                ('japanese', 4),
                ]
 
+
+
 # try different n-phone models
-MODEL_INFO = {'n': 4, 'smoothing': .01, 
+MODEL_INFO = {'n': 5, 'smoothing': .01, 
 			  'match_on': 'sylls', # phones vs. sylls
 			  }
 

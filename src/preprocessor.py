@@ -43,7 +43,6 @@ class Preprocessor(object):
             self.df_preprocessed = self.df_original.copy()
             self.df_preprocessed['PhonDISC'] = self.df_preprocessed['PhonDISC'].apply(lambda x: self.remap_transcription(x))
         elif self.language in ["french", 'french_polysemy']:
-            ## TODO: Remove proper nouns? ['4_cgram']!='PRO:per']
             self.df_preprocessed = self.df_original[self.df_original['14_islem']==1]
         elif self.language in ['dutch', 'dutch_polysemy']:
             self.df_preprocessed = self.df_original.dropna()
