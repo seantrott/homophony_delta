@@ -1,0 +1,688 @@
+---
+title: "Information Theory approach"
+author: "Sean Trott"
+date: "10/29/2021"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE )#, dpi=300)
+```
+
+
+```{r include=FALSE}
+library(tidyverse)
+library(lme4)
+```
+
+
+# Helper functions
+
+Calculate MI for each lexicon. MI is defined as:
+
+$I(X; Y) = \sum_{y\in{Y}}\sum_{x\in{X}}p(x, y)log(\frac{p(x, y)}{p(x)p(y)})$
+
+We can translate this formula into the domain of homophony by thinking about the mutual information between words and meanings.
+
+$I(W; M) = \sum_{w\in{W}}\sum_{m\in{M}}p(w, m)log(\frac{p(w, m)}{p(w)p(m)})$
+
+```{r}
+calculate_MI = function(df) {
+  
+  # First, calculate p(m) and p(w)
+  # p(m) = #meaning occurrences / size of dataset
+  # p(w) = #wordform occurrences / size of dataset
+  df = df %>%
+    mutate(pm = freq_adjusted / sum(df$freq_adjusted)) %>%
+    group_by(wordform) %>%
+    mutate(wf = sum(freq_adjusted)) %>%
+    ungroup() %>%
+    mutate(pw = wf / sum(df$freq_adjusted))
+  
+  ## calculate p(m|w)
+  ## p(m|w) = #meaning occurrences / #wordform occurrences
+  ## p(m & w) = p(m|w) * p(w)
+  df = df %>%
+    ## calculate p(m|w)
+    mutate(cond_prob = freq_adjusted / wf) %>%
+    ## calculate p(m&w)
+    mutate(joint_prob = cond_prob * pw) %>%
+    mutate(mi = joint_prob * log(joint_prob/(pw*pm)))
+  
+  # Return df
+  df
+}
+```
+
+We also define a function to calculate expected KL-D for each word/meaning pairing. This is the distance between the speaker and listener distribution. Because the speaker's distribution for a given meaning is assumed to be a point distribution (they're 100% confident in the meaning they want to express), this reduces to the expected surprisal:
+
+$p(m)*log(\frac{1}{p(m|w)})$
+
+```{r}
+calculate_kld = function(df) {
+  
+  # E[KLD] = p(m) * log(1/p(m|w))
+  df = df %>%
+    mutate(kld = pm * log(1/cond_prob))
+  
+  df
+}
+```
+
+
+This is a helper function for calculating entropy and other information about overall ambiguity.
+
+## Baseline functions
+
+These functions create the various baselines.
+
+```{r}
+## Creates baseline weighted by phonotactic plausibilty of wordforms.
+create_baselines_phonotactic_weighting = function(df_wordforms, df_lemmas, N) {
+  
+  # Initialize random seed each time function is called
+  set.seed(1)
+  
+  # Create dataframe to store each baseline metrics
+  df_mi = tibble()
+
+  # For each iteration...
+  for (n in c(1:N)) {
+    df_new = data.frame()
+    for (syll in unique(df_lemmas$num_sylls_est)) {
+      
+      # Get lemmas of appropriate length
+      df_tmp_lemmas = df_lemmas %>%
+        filter(num_sylls_est == syll)
+      
+      # Get wordforms of appropriate length
+      df_tmp_wordforms = df_wordforms %>%
+        filter(num_sylls_est == syll)
+      
+      # sample from wordforms
+      df_sampled_w = df_tmp_wordforms %>%
+        sample_n(size = nrow(df_tmp_lemmas),
+                 replace = TRUE,
+                 weight = p_normalized)
+      
+      # Add wordform and normalized probability, just in case we need it
+      df_tmp_lemmas$wordform = df_sampled_w$wordform
+      df_tmp_lemmas$p_normalized = df_sampled_w$p_normalized
+      
+      # Add to df_new
+      df_new = df_new %>%
+        bind_rows(df_tmp_lemmas)
+      
+      # Set lexicon number
+      df_new$lexicon = n
+      
+      df_new = df_new %>%
+        calculate_MI() %>%
+        calculate_kld()
+    }
+    
+    # Calculate lexicon statistics
+    mi = df_new %>% summarise(MI = sum(mi),
+                              lex = mean(lexicon),
+                              KLD = sum(kld))
+    
+
+    df_mi = df_mi %>%
+      bind_rows(mi)
+  } 
+  df_mi
+}
+
+```
+
+
+
+# English Lexicon
+
+First, load wordforms with phonotactic measures, and normalize their probabilities.
+
+```{r}
+## setwd("/Users/seantrott/Dropbox/UCSD/Research/Ambiguity/Evolution/homophony_delta/analyses")
+df_english = read_csv("../data/processed/english/reals/english_with_mps_5phone_holdout.csv") 
+
+df_english = df_english %>%
+  # This is important to get the baseline functions to work (references "wordform" column)
+  mutate(wordform = PhonDISC) %>%
+  mutate(p = 10 ** heldout_log_prob) %>%
+  group_by(num_sylls_est) %>%
+  mutate(total_p = sum(p)) %>%
+  mutate(p_normalized = p / total_p)
+
+## Add #sylls
+df_sylls = df_english %>%
+  select(num_sylls_est, PhonDISC)
+```
+
+
+Next, load the lemmas with their frequency estimates.
+
+
+```{r}
+df_english_lemmas = read_delim("../data/frequency/english/lemmas.csv", delim = "\\",
+                               quote = "")
+nrow(df_english_lemmas)
+
+df_english_lemmas = df_english_lemmas %>%
+  mutate(freq_adjusted = Cob + 1) %>%
+  group_by(PhonDISC) %>%
+  mutate(total_frequency = sum(freq_adjusted),
+         relative_frequency = freq_adjusted / total_frequency) %>%
+  ungroup()
+
+## Add #sylls
+df_english_lemmas = df_english_lemmas %>%
+  left_join(df_sylls, on = PhonDISC) %>%
+  drop_na(num_sylls_est)
+
+df_english_lemmas$lemma_id = c(1:nrow(df_english_lemmas))
+
+```
+
+## Calculate scores for real lexicon
+
+```{r}
+df_english_lemmas = df_english_lemmas %>%
+  mutate(wordform = PhonDISC) %>%
+  calculate_MI() %>%
+  mutate(kld = pm * log(1/cond_prob))
+
+## Calculate summary MI and KL-D
+real_english = df_english_lemmas %>%
+  summarise(KLD = sum(kld),
+            MI = sum(mi))
+
+real_english
+
+```
+
+
+
+## Calculate scores for artificial lexica
+
+Now, create a series of baselines and calculate the MI and KL-D for each baseline:
+
+```{r}
+df_mi_english_weighted = create_baselines_phonotactic_weighting(df_english,
+                                                df_english_lemmas,
+                                                N = 100)
+```
+
+Now we compare the baseline to the real lexicon:
+
+```{r}
+
+df_mi_english_weighted %>%
+  ggplot(aes(x = MI,
+             y = KLD)) +
+  geom_point(alpha = .5,
+             size = 2) +
+  geom_point(data = real_english,
+             aes(x = MI,
+                 y = KLD),
+             color = "Blue",
+             alpha = .3,
+             size = 5) +
+  theme_bw()
+
+```
+
+# Dutch Lexicon
+
+First, load wordforms with phonotactic measures, and normalize their probabilities.
+
+```{r}
+df_dutch = read_csv("../data/processed/dutch/reals/dutch_with_mps_5phone_holdout.csv")
+
+df_dutch = df_dutch %>%
+  mutate(p = 10 ** heldout_log_prob) %>%
+  mutate(wordform = PhonDISC) %>%
+  group_by(num_sylls_est) %>%
+  mutate(total_p = sum(p)) %>%
+  mutate(p_normalized = p / total_p)
+
+## Add #sylls
+df_sylls = df_dutch %>%
+  select(num_sylls_est, PhonDISC)
+```
+
+
+Next, load the lemmas with their frequency estimates.
+
+
+```{r}
+df_dutch_lemmas = read_delim("../data/frequency/dutch/lemmas.csv", delim = "\\")
+
+nrow(df_dutch_lemmas)
+df_dutch_lemmas = df_dutch_lemmas %>%
+  mutate(freq_adjusted = Inl + 1) %>%
+  group_by(PhonDISC) %>%
+  mutate(total_frequency = sum(freq_adjusted),
+         relative_frequency = freq_adjusted / total_frequency) %>%
+  ungroup()
+
+## Add #sylls
+df_dutch_lemmas = df_dutch_lemmas %>%
+  left_join(df_sylls, on = PhonDISC) %>%
+  drop_na(num_sylls_est)
+
+df_dutch_lemmas$lemma_id = c(1:nrow(df_dutch_lemmas))
+
+```
+
+## Calculate scores for real lexicon
+
+```{r}
+df_dutch_lemmas = df_dutch_lemmas %>%
+  mutate(wordform = PhonDISC) %>%
+  calculate_MI() %>%
+  mutate(kld = pm * log(1/cond_prob))
+
+
+## Calculate summary MI and KL-D
+real_dutch = df_dutch_lemmas %>%
+  summarise(KLD = sum(kld),
+            MI = sum(mi))
+
+real_dutch
+
+```
+
+
+
+## Calculate scores for artificial lexica
+
+
+Now, create the baselines and compare them to the real lexicon.
+
+```{r}
+df_mi_dutch = create_baselines_phonotactic_weighting(df_dutch,
+                                                df_dutch_lemmas,
+                                                N = 100)
+
+df_mi_dutch %>%
+  ggplot(aes(x = MI,
+             y = KLD)) +
+  geom_point(alpha = .5,
+             size = 2) +
+  geom_point(data = real_dutch,
+             aes(x = MI,
+                 y = KLD),
+             color = "Blue",
+             alpha = .3,
+             size = 5) +
+  theme_bw()
+
+```
+
+
+
+# German Lexicon
+
+First, load wordforms with phonotactic measures, and normalize their probabilities.
+
+```{r}
+df_german  = read_csv("../data/processed/german/reals/german_with_mps_5phone_holdout.csv") 
+
+df_german = df_german %>%
+  mutate(wordform = PhonDISC) %>%
+  mutate(p = 10 ** heldout_log_prob) %>%
+  group_by(num_sylls_est) %>%
+  mutate(total_p = sum(p)) %>%
+  mutate(p_normalized = p / total_p)
+
+## Add #sylls
+df_sylls = df_german %>%
+  select(num_sylls_est, PhonDISC)
+```
+
+
+Next, load the lemmas with their frequency estimates.
+
+
+```{r}
+df_german_lemmas = read_delim("../data/frequency/german/lemmas.csv", delim = "\\")
+nrow(df_german_lemmas)
+
+df_german_lemmas = df_german_lemmas %>%
+  mutate(freq_adjusted = Mann + 1) %>%
+  group_by(PhonDISC) %>%
+  mutate(total_frequency = sum(freq_adjusted),
+         relative_frequency = freq_adjusted / total_frequency) %>%
+  ungroup()
+
+## Add #sylls
+df_german_lemmas = df_german_lemmas %>%
+  left_join(df_sylls, on = PhonDISC) %>%
+  drop_na(num_sylls_est)
+
+df_german_lemmas$lemma_id = c(1:nrow(df_german_lemmas))
+
+```
+
+## Calculate scores for real lexicon
+
+```{r}
+df_german_lemmas = df_german_lemmas %>%
+  mutate(wordform = PhonDISC) %>%
+  calculate_MI() %>%
+  mutate(kld = pm * log(1/cond_prob))
+
+
+## Calculate summary MI and KL-D
+real_german = df_german_lemmas %>%
+  summarise(KLD = sum(kld),
+            MI = sum(mi))
+
+real_german
+
+```
+
+
+
+## Calculate scores for artificial lexica
+
+
+Now, create the baselines and compare them to the real lexicon:
+
+```{r}
+df_mi_german = create_baselines_phonotactic_weighting(df_german,
+                                                df_german_lemmas,
+                                                N = 100)
+
+
+df_mi_german %>%
+  ggplot(aes(x = MI,
+             y = KLD)) +
+  geom_point(alpha = .5,
+             size = 2) +
+  geom_point(data = real_german,
+             aes(x = MI,
+                 y = KLD),
+             color = "Blue",
+             alpha = .3,
+             size = 5) +
+  theme_bw()
+```
+
+
+# French Lexicon
+
+```{r}
+df_french = read_csv("../data/processed/french/reals/french_with_mps_4phone_holdout.csv")
+nrow(df_french)
+
+df_french = df_french %>%
+  # This is important to get the baseline functions to work (references "wordform" column)
+  mutate(wordform = `2_phon`) %>%
+  mutate(p = 10 ** heldout_log_prob) %>%
+  group_by(num_sylls_est) %>%
+  mutate(total_p = sum(p)) %>%
+  mutate(p_normalized = p / total_p)
+
+## Add #sylls
+df_sylls = df_french %>%
+  select(num_sylls_est, wordform)
+```
+
+
+Next, load the lemmas with their frequency estimates.
+
+
+```{r}
+df_french_lemmas = read_csv("../data/processed/french/reals/french_all_reals_4phone.csv")
+nrow(df_french_lemmas)
+sum(df_french_lemmas$`10_freqlivres`)
+
+df_french_lemmas = df_french_lemmas %>%
+  mutate(wordform = `2_phon`) %>%
+  ## Multiply by 14.8, b/c measures were divided by 14.8 in Lexique
+  mutate(freq_adjusted = `8_freqlemlivres` * 14.8 + 1) %>%
+  group_by(wordform) %>%
+  mutate(total_frequency = sum(freq_adjusted),
+         relative_frequency = freq_adjusted / total_frequency) %>%
+  ungroup()
+nrow(df_french_lemmas)
+
+
+## Add #sylls
+df_french_lemmas = df_french_lemmas %>%
+  left_join(df_sylls, on = wordform) %>%
+  drop_na(num_sylls_est)
+
+df_french_lemmas$lemma_id = c(1:nrow(df_french_lemmas))
+
+```
+
+## Calculate scores for real lexicon
+
+```{r}
+df_french_lemmas = df_french_lemmas %>%
+  calculate_MI() %>%
+  mutate(kld = pm * log(1/cond_prob))
+
+## Calculate summary MI and KL-D
+real_french = df_french_lemmas %>%
+  summarise(KLD = sum(kld),
+            MI = sum(mi))
+
+real_french
+
+```
+
+
+
+## Calculate scores for artificial lexica
+
+Now, create the baselines and compare them to the real lexicon.
+
+```{r}
+df_mi_french = create_baselines_phonotactic_weighting(df_french,
+                                                df_french_lemmas,
+                                                N = 100)
+
+df_mi_french %>%
+  ggplot(aes(x = MI,
+             y = KLD)) +
+  geom_point(alpha = .5,
+             size = 2) +
+  geom_point(data = real_french,
+             aes(x = MI,
+                 y = KLD),
+             color = "Blue",
+             alpha = .3,
+             size = 5) +
+  theme_bw()
+```
+
+
+
+# Mandarin Lexicon
+
+First, load wordforms with phonotactic measures, and normalize their probabilities.
+
+```{r}
+
+df_mandarin = read_csv("../data/processed/mandarin_cld/reals/mandarin_cld_with_mps_4phone_holdout.csv")
+nrow(df_mandarin)
+
+df_mandarin = df_mandarin %>%
+  # This is important to get the baseline functions to work (references "wordform" column)
+  mutate(wordform = phonetic_remapped) %>%
+  mutate(p = 10 ** heldout_log_prob) %>%
+  group_by(num_sylls_est) %>%
+  mutate(total_p = sum(p)) %>%
+  mutate(p_normalized = p / total_p)
+
+## Add #sylls
+df_sylls = df_mandarin %>%
+  select(num_sylls_est, wordform)
+```
+
+
+Next, load the lemmas with their frequency estimates.
+
+
+```{r}
+df_mandarin_lemmas = read_csv("../data/processed/mandarin_cld/reals/mandarin_cld_all_reals_4phone.csv")
+nrow(df_mandarin_lemmas)
+sum(df_mandarin_lemmas$FrequencyRaw)
+
+df_mandarin_lemmas = df_mandarin_lemmas %>%
+  mutate(wordform = phonetic_remapped) %>%
+  mutate(freq_adjusted = FrequencyRaw +1) %>%
+  group_by(phonetic_remapped) %>%
+  mutate(total_frequency = sum(freq_adjusted),
+         relative_frequency = freq_adjusted / total_frequency) %>%
+  ungroup()
+nrow(df_mandarin_lemmas)
+
+
+## Add #sylls
+df_mandarin_lemmas = df_mandarin_lemmas %>%
+  left_join(df_sylls, on = wordform) %>%
+  drop_na(num_sylls_est)
+
+df_mandarin_lemmas$lemma_id = c(1:nrow(df_mandarin_lemmas))
+
+```
+
+## Calculate scores for real lexicon
+
+```{r}
+df_mandarin_lemmas = df_mandarin_lemmas %>%
+  calculate_MI() %>%
+  mutate(kld = pm * log(1/cond_prob))
+
+## Calculate summary MI and KL-D
+real_mandarin = df_mandarin_lemmas %>%
+  summarise(KLD = sum(kld),
+            MI = sum(mi))
+
+real_mandarin
+
+```
+
+
+
+## Calculate scores for artificial lexica
+
+Now, create an artificial lexicon:
+
+```{r}
+df_mi_mandarin = create_baselines_phonotactic_weighting(df_mandarin,
+                                                df_mandarin_lemmas,
+                                                N = 100)
+
+df_mi_mandarin %>%
+  ggplot(aes(x = MI,
+             y = KLD)) +
+  geom_point(alpha = .5,
+             size = 2) +
+  geom_point(data = real_mandarin,
+             aes(x = MI,
+                 y = KLD),
+             color = "Blue",
+             alpha = .3,
+             size = 5) +
+  theme_bw()
+
+```
+
+
+# Combine all together
+
+```{r}
+real_english = real_english %>%
+  mutate(Lexicon = "Real",
+         Language = "English")
+real_german = real_german %>%
+  mutate(Lexicon = "Real",
+         Language = "German")
+real_dutch = real_dutch %>%
+  mutate(Lexicon = "Real",
+         Language = "Dutch")
+real_french = real_french %>%
+  mutate(Lexicon = "Real",
+         Language = "French")
+real_mandarin = real_mandarin %>%
+  mutate(Lexicon = "Real",
+         Language = "Mandarin")
+
+df_mi_english_weighted = df_mi_english_weighted %>%
+  mutate(Language = "English",
+         Lexicon = "Baseline")
+df_mi_dutch = df_mi_dutch %>%
+  mutate(Language = "Dutch",
+         Lexicon = "Baseline")
+df_mi_french = df_mi_french %>%
+  mutate(Language = "French",
+         Lexicon = "Baseline")
+df_mi_german = df_mi_german %>%
+  mutate(Language = "German",
+         Lexicon = "Baseline")
+df_mi_mandarin = df_mi_mandarin %>%
+  mutate(Language = "Mandarin",
+         Lexicon = "Baseline")
+
+## Combine together
+df_mi_all = df_mi_english_weighted %>%
+  bind_rows(df_mi_dutch) %>%
+  bind_rows(df_mi_french) %>%
+  bind_rows(df_mi_german) %>%
+  bind_rows(df_mi_mandarin) %>%
+  bind_rows(real_english) %>%
+  bind_rows(real_dutch) %>%
+  bind_rows(real_french) %>%
+  bind_rows(real_german) %>%
+  bind_rows(real_mandarin)
+  
+
+df_mi_real = df_mi_all %>%
+  filter(Lexicon == "Real")
+
+df_mi_art = df_mi_all %>%
+  filter(Lexicon == "Baseline")
+
+df_mi_all %>%
+  ggplot(aes(x = MI,
+             y = KLD,
+             color = Lexicon)) +
+  geom_point(alpha = .2,
+             size = 1) +
+  theme_bw() +
+  geom_point(data = df_mi_real,
+             aes(x = MI,
+                 y = KLD),
+             size = 2) +
+  labs(x = "Mutual Information",
+       y = "KL-Divergence") +
+  facet_wrap(~Language)
+
+
+ggsave("../Figures/s4_scatter.png", dpi = 300)
+
+
+
+df_mi_art %>%
+  ggplot(aes(x = Language,
+             y = MI,
+             fill = Lexicon)) +
+  geom_violin() +
+  geom_point(data = df_mi_real,
+             aes(x = Language,
+                 y = MI)) +
+  theme_bw()
+
+ggsave("../Figures/supp_mi_violin.png", dpi = 300)
+```
+

@@ -1,0 +1,79 @@
+---
+title: "Explanation of simplification of terms"
+# author: "Sean Trott"
+date: "1/6/2022"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+---
+
+This document explains how mutual information and KL-divergence end up simplifying (for our use case), such that the latter ends up being the perfect inverse of the former (shifted by the entropy over meanings $M$). 
+
+# Mutual information
+
+The original formula is:
+
+$I(W; M) = \sum_{w\in{W}}\sum_{m\in{M}}p(w, m)log(\frac{p(w, m)}{p(w)p(m)})$
+
+However, $p(w, m)$ actually simplifies to $p(m)$ because of the following points:
+
+- $p(w, m) = p(m | w) * p(w)$  
+- $p(m | w) = \frac{F(m)}{F(w)}$ (Where $F$ represents the frequency of the meaning/wordform)
+- $\frac{F(m)}{F(w)} = \frac{p(m)}{p(w)}$, because $p(m) = \frac{F(m)}{N}$ and $p(w) = \frac{F(w)}{N}$, i.e., both $p(m)$ and $(pw)$ have the same denominator ($N$) so the ratio is the same as the ratio of their frequencies.  
+- This means that: $p(m | w) = \frac{F(m)}{F(w)}= \frac{p(m)}{p(w)}$
+- So: $p(w, m) = p(m | w) * p(w) = \frac{p(m)}{p(w)} * p(w) = p(m)$
+
+Ultimately, this is all because the wordform corresponding to a particular meaning cannot occur in the *absence* of that meaning.
+
+We can now simplify the original formula as follows:
+
+$I(W; M) = \sum_{w\in{W}}\sum_{m\in{M}}p(m)log(\frac{p(m)}{p(w)p(m)}) = \sum_{w\in{W}}\sum_{m\in{M}}p(m)log(\frac{1}{p(w)})$
+
+As Tyler notes, we can simplify this further. Because each $m$ maps to exactly one $w_m$, we're left with exactly one nonzero term for each $m$. Then, our sum is just over $M$:
+
+$I(W; M) = \sum_m p(m) log(\frac{1}{p(w_m)})$ 
+
+This simplifies even further, if we flip the sign on the equation:
+
+$I(W; M) = -\sum_m p(m) log(p(w_m))$
+
+# KL-Divergence
+
+Expected KL-Divergence is defined as follows:
+
+$D(M|M') = \sum_{m\in{M}}p(m)*log(\frac{1}{p(m|w_m)})$
+
+But we can simplify the term $p(m|w_m)$:
+
+$p(m | w_m) = \frac{p(m,w_m)}{p(w_m)} = \frac{p(m)}{p(w_m)}$
+
+Thus, the log term can be simplified:
+
+$log(\frac{1}{p(m|w_m)}) = log(\frac{p(w_m)}{p(m)}) = log(p(w_m)) - log(p(m))$
+
+Thus, KL-D becomes:
+
+$D(M|M') = \sum_{m\in{M}} p(m) (log(p(w_m)) - log(p(m))) = \sum_{m\in{M}} p(m) log(p(w_m)) - \sum_{m\in{M}} p(m) log(p(m))$
+
+The first term in this simplification is equivalent to our simplified mutual information formula, but with the sign flipped:
+
+$\sum_{m\in{M}} p(m) log(p(w_m)) = -I(W;M)$
+
+And the second term in this final simplification is just equivalent to the entropy over meaning space, but with the sign flipped:
+
+$\sum_{m\in{M}} p(m) log(p(m)) = -Entropy(M)$
+
+So we could choose to rewrite this as:
+
+$D(M|M') = -I(W;M) - (-Entropy(M)) = Entropy(M) - I(W;M)$
+
+# Putting it altogether
+
+The Entropy term in the simplified KL-D formula is *constant* across all lexica within a language. Each lexicon within a language has the same probability distribution over meanings $M$. This is because the different baselines just constitute a "reshuffling" of each meaning and reassignment to new wordforms---but their probabilities don't change.
+
+Ultimately, then, what we're really doing is comparing the mutual information $I(W;M)$ to the inverse of this term, $-I(W;M)$, with the latter shifted by some constant amount (the entropy over meanings $M$).
+
+It is no surprise, then, that mutual information and KL-divergence exhibit a perfect negative correlation.
+
+**Note**: In my "toy" lexica, a fresh meaning distribution was technically created for each lexicon. This distribution was basically the same each time, but a small amount of noise was added. This is why the relationship was not *perfectly* linear---the entropy over meanings $M$ was *slightly* different each time.

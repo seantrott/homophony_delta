@@ -1,0 +1,1005 @@
+---
+title: "Homophony Delta (LSTM)"
+author: "Sean Trott"
+date: "November 16, 2021"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE )#, dpi=300)
+```
+
+
+```{r include=FALSE}
+library(tidyverse)
+library(forcats)
+library(broom)
+```
+
+# Calculating expected homophony
+
+Given $M$ meanings to express, and $W$ wordforms with which to express them, each associated with some probability $p_i$, how many meanings should each wordform $w_i$ carry as a function of its normalized probability $p_i$?
+
+# Helper functions
+
+We also define several helper functions to simplify the data processing pipeline.
+
+First, we need a function that reads in an aggregated lexicon (i.e., across homophonous wordforms), as well as the original lexicon with original entries intact; this function will then identify the corrected number of meanings `M` per word length, and merge that information with the aggregated lexicon.
+
+```{r}
+read_data = function(agg_path) {
+  
+  # Read in aggregated data
+  df_agg = read_csv(agg_path)
+  
+  # Below, we identify the number of *words* of each word length.
+  df_total_counts = df_agg %>%
+    mutate(k_actual = num_homophones + 1) %>%
+    group_by(num_sylls_est) %>%
+    summarise(M = sum(k_actual))
+  
+  # Merge with counts
+  df_agg = merge(df_agg, df_total_counts, by = "num_sylls_est")
+  nrow(df_agg)
+  
+  df_agg
+}
+```
+
+We then define a function to **normalize** the probability of a given wordform relative to the sum of probabilities of wordforms for that length.
+
+
+```{r}
+normalize_probabilities = function(df) {
+  ### For a given dataframe, normalize probabilities "p" relative to #words of a given elgnth.
+  
+  ## First get probabilities
+  df = df %>%
+    mutate(normalized_surprisal = surprisal_lstm/num_phones,
+           p = 2 ** logprob_lstm)
+  
+  # Calculate sum(p) for each syllable length bucket.
+  df_syl_sums = df %>%
+    group_by(num_sylls_est) %>%
+    summarise(total_prob = sum(p))
+  
+  # Merge with aggregated data, and normalize
+  df = df %>%
+    left_join(df_syl_sums, on = "num_sylls_est") %>%
+    mutate(p_normalized = p / total_prob)
+  
+  df
+}
+
+```
+
+We now define a function to compute the expected number of homophones $k_i$ for a given wordform $w_i$. This will also calculate the `delta` between the real and expected amount.
+
+
+```{r}
+compute_expected_homophones = function(df) {
+  
+  ## Compute expected homophones "k" of a wordform by multiplying normalized probability
+  ## "p" by the number of meanings "M".
+  
+  df = df %>%
+    # Expected number of "successes" (entries), minus 1
+    mutate(k = p_normalized * M - 1) %>%
+    mutate(delta = num_homophones - k)
+  
+  df
+}
+```
+
+
+We also define a function to run the main regression:
+
+```{r}
+run_regression = function(df) {
+  
+  # Initialize output
+  out = list()
+  
+  # Build full model
+  model_full = lm(data = df,
+                  delta ~ frequency + num_sylls_est + normalized_surprisal)
+
+  # Build reduced model
+  model_reduced = lm(data = df,
+                     delta ~ num_sylls_est + normalized_surprisal)
+  
+  # Run model comparison
+  comparison = anova(model_reduced, model_full)
+  df_comp = broom::tidy(comparison) %>%
+    na.omit()
+  
+  # Tidy model output
+  df_model = broom::tidy(model_full)
+  
+  # Add to list parameters
+  out$model = df_model
+  out$comparison = df_comp
+  
+  out
+}
+
+```
+
+
+And several plotting functions:
+
+```{r}
+plot_outcome = function(df_output) {
+  
+  df_output$model$predictor = fct_recode(
+    df_output$model$term,
+    "Number of Syllables" = "num_sylls_est",
+    "Normalized Surprisal" = "normalized_surprisal",
+    "Log(Frequency)" = "frequency"
+    # "Neighborhood Size" = "neighborhood_size"
+  )
+  
+  ### Plots outcome of regression
+  g = df_output$model %>%
+    ggplot(aes(x = predictor,
+               y = estimate)) +
+    geom_point() +
+    coord_flip() +
+    geom_hline(yintercept = 0, linetype = "dotted") +
+    geom_errorbar(aes(ymin = estimate - 2*std.error, 
+                      ymax = estimate + 2*std.error), 
+                  width=.2,
+                  position=position_dodge(.9)) +
+    labs(x = "Predictor",
+         y = "Estimate") +
+    theme_minimal()
+  
+  g
+}
+
+plot_comparison = function(df) {
+  
+  # Plots expected vs. actual per each wordform.
+  g = df %>%
+    ggplot(aes(x = k,
+               y = num_homophones)) +
+    geom_point(alpha = .5) +
+    scale_x_continuous(limits = c(-1, max(df$k))) +
+    scale_y_continuous(limits = c(0, max(df$k))) +
+    geom_abline(intercept = 0, slope = 1, linetype = "dotted") + 
+    labs(x = "Expected number of homophones",
+         y = "Actual number of homophones") +
+    theme_minimal()
+  
+  g
+}
+
+
+plot_bins = function(df, n, column, label) {
+  
+  # Plots delta ~ frequency bins.
+  
+  df$binned = as.numeric(ntile(pull(df, column), n = n))
+  
+  g = df %>%
+    group_by(binned) %>%
+    summarise(mean_delta = mean(delta),
+              se_delta = sd(delta) / sqrt(n())) %>%
+    ggplot(aes(x = binned,
+               y = mean_delta)) +
+    geom_point(stat = "identity", size = .2) +
+    geom_hline(yintercept = 0, linetype = "dotted") +
+    geom_errorbar(aes(ymin = mean_delta - se_delta, 
+                      ymax = mean_delta + se_delta), 
+                  width=.2,
+                  position=position_dodge(.9)) +
+    labs(x = label,
+         y = "Delta (Real - Expected)") +
+    geom_smooth() +
+    theme_minimal()
+
+    g
+}
+
+
+plot_contrast = function(df, bins = 20) {
+  
+  df$frequency_binned = as.numeric(ntile(df$frequency, n = 20))
+  
+  g = df %>%
+    mutate(expected = k,
+           actual = num_homophones) %>%
+    pivot_longer(c(expected, actual), names_to = "model", values_to = "homophones") %>%
+    ggplot(aes(x = frequency_binned,
+               y = homophones,
+               color = model)) +
+    stat_summary (fun = function(x){mean(x)},
+                  fun.min = function(x){mean(x) - sd(x)/sqrt(length(x))},
+                  fun.max = function(x){mean(x) + sd(x)/sqrt(length(x))},
+                  geom= 'pointrange') +
+                  # position=position_dodge(width=0.95)) +
+    labs(x = "Binned Frequency",
+         y = "Number of Homophones") +
+    theme_bw()
+  
+  g
+}
+
+```
+
+
+# Homophony Delta ~ Frequency
+
+## English
+
+First, we load and process the data.
+
+```{r}
+
+## setwd("/Users/seantrott/Dropbox/UCSD/Research/Ambiguity/Evolution/homophony_delta/analyses")
+df_english = read_data("../data/processed/english/reals/english_with_lstm.csv")
+
+nrow(df_english)
+
+## Now normalize probabilities and compute expected homophones per wordform
+df_english = df_english %>% 
+  normalize_probabilities() %>%
+  compute_expected_homophones()
+
+## Double-check that this equals correct amount in lexicon
+df_english %>%
+  group_by(num_sylls_est) %>%
+  summarise(total = sum(k + 1),
+            correct_total = mean(M))
+
+
+```
+
+We then merge with data for frequency of each individual lemma. (We also calculate entropy over senses in the process.)
+
+```{r}
+df_english_lemmas = read_delim("../data/frequency/english/lemmas.csv", delim = "\\",
+                               quote = "")
+nrow(df_english_lemmas)
+
+df_english_lemmas = df_english_lemmas %>%
+  mutate(freq_adjusted = Cob + 1) %>%
+  group_by(PhonDISC) %>%
+  mutate(total_frequency = sum(freq_adjusted),
+         relative_frequency = freq_adjusted / total_frequency)
+
+df_entropy = df_english_lemmas %>%
+  group_by(PhonDISC) %>%
+  summarise(entropy = -sum(relative_frequency * log(relative_frequency)),
+            total_frequency = mean(total_frequency))
+
+df_merged_english = df_english %>%
+  # inner_join(df_entropy, by = "PhonDISC")
+  inner_join(df_entropy, by = "PhonDISC")
+
+nrow(df_merged_english)
+
+df_merged_english$frequency = log10(df_merged_english$total_frequency)
+
+```
+
+Compare the original n-phone surprisal to the LSTM surprisal:
+
+```{r}
+df_merged_english %>%
+  ggplot(aes(x = surprisal,
+             y = surprisal_lstm,
+             color = frequency)) +
+  geom_point(alpha = .3) +
+  geom_smooth(method = "lm") +
+  theme_bw() +
+  labs(x = "Surprisal (N-phone model)",
+       y = "Surprisal (LSTM)") +
+  facet_wrap(~num_sylls_est)
+```
+
+
+
+Now we can visualize the outcome in a variety of ways:
+
+```{r}
+
+df_merged_english %>%
+  plot_bins(n = 20, column = "frequency", label = "Binned frequency")
+
+```
+
+
+And finally, we can run the regression and visualize model coefficients:
+
+```{r}
+
+output = df_merged_english %>% 
+  run_regression()
+
+output %>%
+  plot_outcome()
+
+output$model
+output$comparison
+
+```
+
+
+Directly contrast the relationships:
+
+```{r}
+df_merged_english %>%
+  plot_contrast(bins = 20)
+
+```
+
+
+
+## Dutch
+
+First, we load and process the data.
+
+```{r}
+df_dutch = read_data("../data/processed/dutch/reals/dutch_with_lstm.csv")
+nrow(df_dutch)
+
+## Now normalize probabilities and compute expected homophones per wordform
+df_dutch = df_dutch %>% 
+  normalize_probabilities() %>%
+  compute_expected_homophones()
+
+## Double-check that this equals correct amount in lexicon
+df_dutch %>%
+  group_by(num_sylls_est) %>%
+  summarise(total = sum(k + 1),
+            correct_total = mean(M))
+
+
+```
+
+We then merge with data for frequency of each individual lemma. (We also calculate entropy over senses in the process.)
+
+```{r}
+df_dutch_lemmas = read_delim("../data/frequency/dutch/lemmas.csv", delim = "\\")
+
+nrow(df_dutch_lemmas)
+df_dutch_lemmas = df_dutch_lemmas %>%
+  mutate(freq_adjusted = Inl + 1) %>%
+  group_by(PhonDISC) %>%
+  mutate(total_frequency = sum(freq_adjusted),
+         relative_frequency = freq_adjusted / total_frequency)
+
+df_entropy = df_dutch_lemmas %>%
+  group_by(PhonDISC) %>%
+  summarise(entropy = -sum(relative_frequency * log(relative_frequency)),
+            total_frequency = mean(total_frequency))
+
+
+df_merged_dutch = df_dutch %>%
+  # inner_join(df_entropy, by = "PhonDISC")
+  inner_join(df_entropy, by = "PhonDISC")
+
+nrow(df_merged_dutch)
+
+df_merged_dutch$frequency = log10(df_merged_dutch$total_frequency)
+
+
+```
+
+
+Now we can visualize the outcome in a variety of ways:
+
+```{r}
+
+df_merged_dutch %>%
+  plot_comparison()
+
+df_merged_dutch %>%
+  plot_bins(n = 20, column = "frequency", label = "Binned frequency")
+
+
+```
+
+And finally, we can run the regression and visualize model coefficients:
+
+```{r}
+output = df_merged_dutch %>% 
+  run_regression()
+
+output %>%
+  plot_outcome()
+
+output$model
+output$comparison
+
+```
+
+
+Directly contrast the relationships:
+
+```{r}
+df_merged_dutch %>%
+  plot_contrast(bins = 20)
+```
+
+
+## German
+
+
+```{r}
+df_german = read_data("../data/processed/german/reals/german_with_lstm.csv")
+
+nrow(df_german)
+
+## Now normalize probabilities and compute expected homophones per wordform
+df_german = df_german %>% 
+  normalize_probabilities() %>%
+  compute_expected_homophones()
+
+## Double-check that this equals correct amount in lexicon
+df_german %>%
+  group_by(num_sylls_est) %>%
+  summarise(total = sum(k + 1),
+            correct_total = mean(M))
+
+  
+```
+
+
+We then merge with data for frequency of each individual lemma. (We also calculate entropy over senses in the process.)
+
+```{r}
+df_german_lemmas = read_delim("../data/frequency/german/lemmas.csv", delim = "\\")
+nrow(df_german_lemmas)
+
+df_german_lemmas = df_german_lemmas %>%
+  mutate(freq_adjusted = Mann + 1) %>%
+  group_by(PhonDISC) %>%
+  mutate(total_frequency = sum(freq_adjusted),
+         relative_frequency = freq_adjusted / total_frequency)
+
+df_entropy = df_german_lemmas %>%
+  group_by(PhonDISC) %>%
+  summarise(entropy = -sum(relative_frequency * log(relative_frequency)),
+            total_frequency = mean(total_frequency))
+
+df_merged_german = df_german %>%
+  # inner_join(df_entropy, by = "PhonDISC")
+  inner_join(df_entropy, by = "PhonDISC")
+
+nrow(df_merged_german)
+
+df_merged_german$frequency = log10(df_merged_german$total_frequency)
+
+
+```
+
+
+
+Now we can visualize the outcome in a variety of ways:
+
+```{r}
+df_merged_german %>%
+  plot_comparison()
+
+df_merged_german %>%
+  plot_bins(n = 20, column = "frequency", label = "Binned frequency")
+
+```
+
+And finally, we can run the regression and visualize model coefficients:
+
+```{r}
+output = df_merged_german %>% 
+  run_regression()
+
+output %>%
+  plot_outcome()
+
+output$model
+output$comparison
+
+```
+
+Directly contrast the relationships:
+
+```{r}
+df_merged_german %>%
+  plot_contrast(bins = 20)
+```
+
+
+
+## French
+
+
+```{r}
+df_french = read_data("../data/processed/french/reals/french_with_lstm.csv")
+nrow(df_french)
+
+
+## Now normalize probabilities and compute expected homophones per wordform
+df_french = df_french %>% 
+  normalize_probabilities() %>%
+  compute_expected_homophones()
+
+## Double-check that this equals correct amount in lexicon
+df_french %>%
+  group_by(num_sylls_est) %>%
+  summarise(total = sum(k + 1),
+            correct_total = mean(M))
+
+```
+
+
+Read in French lemmas.
+
+```{r}
+df_french_lemmas = read_csv("../data/processed/french/reals/french_all_reals_4phone.csv")
+df_french_lemmas$frequency = df_french_lemmas$`10_freqlivres` + 1
+nrow(df_french_lemmas)
+
+df_french_lemmas = df_french_lemmas %>%
+  ## Multiply by 14.8, b/c measures were divided by 14.8 in Lexique
+  mutate(freq_adjusted = `8_freqlemlivres` * 14.8) %>%
+  group_by(`2_phon`) %>%
+  summarise(total_frequency = sum(frequency))
+
+nrow(df_french_lemmas)
+
+df_french_merged = df_french %>%
+  inner_join(df_french_lemmas, by = "2_phon")
+
+nrow(df_french)
+nrow(df_french_merged)
+
+df_french_merged$frequency = log10(df_french_merged$total_frequency + 1)
+
+
+```
+
+
+
+And finally, we can run the regression and visualize model coefficients:
+
+```{r}
+output = df_french_merged %>% 
+  run_regression()
+
+output %>%
+  plot_outcome()
+
+output$model
+output$comparison
+
+```
+
+
+Directly contrast the relationships:
+
+```{r}
+df_french_merged %>%
+  plot_contrast(bins = 20)
+
+```
+
+
+
+## Japanese
+
+
+```{r}
+df_japanese = read_data("../data/processed/japanese/reals/japanese_with_lstm.csv")
+
+nrow(df_japanese)
+
+## Now normalize probabilities and compute expected homophones per wordform
+df_japanese = df_japanese %>% 
+  normalize_probabilities() %>%
+  compute_expected_homophones()
+
+## Double-check that this equals correct amount in lexicon
+df_japanese %>%
+  group_by(num_sylls_est) %>%
+  summarise(total = sum(k + 1),
+            correct_total = mean(M))
+
+  
+```
+
+Japanese already has frequency data.
+
+```{r}
+df_japanese_lemmas = read_csv("../data/processed/japanese/reals/japanese_all_reals_4phone.csv")
+nrow(df_japanese_lemmas)
+
+df_japanese_lemmas = df_japanese_lemmas %>%
+  group_by(phonetic_remapped) %>%
+  summarise(total_frequency = mean(frequency))
+
+nrow(df_japanese_lemmas)
+
+df_japanese_merged = df_japanese %>%
+  inner_join(df_japanese_lemmas, by = "phonetic_remapped")
+
+nrow(df_japanese)
+nrow(df_japanese_merged)
+
+df_japanese_merged$frequency = log10(df_japanese_merged$total_frequency + 1)
+```
+
+Now, visualize the relationship.
+
+
+And finally, we can run the regression and visualize model coefficients:
+
+```{r}
+output = df_japanese_merged %>% 
+  run_regression()
+
+output %>%
+  plot_outcome()
+
+output$model
+output$comparison
+
+```
+
+
+Directly contrast the relationships:
+
+```{r}
+df_japanese_merged %>%
+  plot_contrast(bins = 20)
+```
+
+
+
+## Mandarin: Chinese Lexical Database
+
+
+Here, we calculate the `Homophony Delta` for Mandarin Chinese, using the **Chinese Lexical Database**.
+
+```{r}
+df_mandarin_cld = read_data("../data/processed/mandarin_cld/reals/mandarin_cld_with_lstm.csv")
+nrow(df_mandarin_cld)
+
+## Now normalize probabilities and compute expected homophones per wordform
+df_mandarin_cld = df_mandarin_cld %>% 
+  normalize_probabilities() %>%
+  compute_expected_homophones()
+
+nrow(df_mandarin_cld)
+
+## Double-check that this equals correct amount in lexicon
+df_mandarin_cld %>%
+  group_by(num_sylls_est) %>%
+  summarise(total = sum(k + 1),
+            correct_total = mean(M))
+
+```
+
+
+
+Mandarin already has frequency data, but we need to make sure it's summed across lemmas.
+
+```{r}
+df_mandarin_lemmas = read_csv("../data/processed/mandarin_cld/reals/mandarin_cld_all_reals_4phone.csv")
+nrow(df_mandarin_lemmas)
+
+df_mandarin_lemmas = df_mandarin_lemmas %>%
+  group_by(phonetic_remapped) %>%
+  summarise(total_frequency = sum(FrequencyRaw))
+
+nrow(df_mandarin_lemmas)
+
+df_mandarin_merged = df_mandarin_cld %>%
+  inner_join(df_mandarin_lemmas, by = "phonetic_remapped")
+
+nrow(df_mandarin_cld)
+nrow(df_mandarin_merged)
+
+df_mandarin_merged$frequency = log10(df_mandarin_merged$total_frequency)
+```
+
+
+Now we can visualize the outcome in a variety of ways:
+
+```{r}
+df_mandarin_merged %>%
+  plot_comparison()
+
+df_mandarin_merged %>%
+  plot_bins(n = 20, column = "frequency", label = "Binned frequency")
+
+```
+
+And finally, we can run the regression and visualize model coefficients:
+
+```{r}
+output = df_mandarin_merged %>% 
+  run_regression()
+
+output %>%
+  plot_outcome()
+
+output$model
+output$comparison
+    
+```
+
+Directly contrast the relationships:
+
+```{r}
+
+df_mandarin_merged %>%
+  plot_contrast(bins = 20)
+
+```
+
+
+# Visualizations
+
+## Combine lexica
+
+Below, we combine the lexica so that we can visualize the central relationships in the same plot.
+
+
+```{r}
+df_merged_english_f = df_merged_english %>%
+  mutate(binned_frequency = ntile(frequency, n = 20)) %>%
+  mutate(binned_neighorhood_size = ntile(neighborhood_size, n = 20)) %>%
+  mutate(language = 'English') %>%
+  select(num_sylls_est, normalized_surprisal, surprisal_lstm, 
+         heldout_surprisal, binned_neighorhood_size,
+         num_homophones, k, frequency, binned_frequency, delta, language)
+
+df_merged_dutch_f = df_merged_dutch %>%
+  mutate(binned_frequency = ntile(frequency, n = 20)) %>%
+  mutate(binned_neighorhood_size = ntile(neighborhood_size, n = 20)) %>%
+  mutate(language = 'Dutch') %>%
+  select(num_sylls_est, normalized_surprisal, surprisal_lstm, 
+         heldout_surprisal, binned_neighorhood_size,
+         num_homophones, k, frequency, binned_frequency, delta, language)
+
+df_merged_german_f = df_merged_german %>%
+  mutate(binned_frequency = ntile(frequency, n = 20)) %>%
+  mutate(binned_neighorhood_size = ntile(neighborhood_size, n = 20)) %>%
+  mutate(language = 'German') %>%
+  select(num_sylls_est, normalized_surprisal, surprisal_lstm, 
+         heldout_surprisal, binned_neighorhood_size,
+         num_homophones, k, frequency, binned_frequency, delta, language)
+
+df_french_f = df_french_merged %>%
+  mutate(binned_frequency = ntile(frequency, n = 20)) %>%
+  mutate(binned_neighorhood_size = ntile(neighborhood_size, n = 20)) %>%
+  mutate(language = 'French') %>%
+  select(num_sylls_est, normalized_surprisal, surprisal_lstm, 
+         heldout_surprisal, binned_neighorhood_size,
+         num_homophones, k, frequency, binned_frequency, delta, language)
+
+df_japanese_f = df_japanese_merged %>%
+  mutate(binned_frequency = ntile(frequency, n = 20)) %>%
+  mutate(binned_neighorhood_size = ntile(neighborhood_size, n = 20)) %>%
+  mutate(language = 'Japanese') %>%
+  select(num_sylls_est, normalized_surprisal, surprisal_lstm, 
+         heldout_surprisal, binned_neighorhood_size,
+         num_homophones, k, frequency, binned_frequency, delta, language)
+
+df_mandarin_cld_f = df_mandarin_merged %>%
+  mutate(binned_frequency = ntile(frequency, n = 20)) %>%
+  mutate(binned_neighorhood_size = ntile(neighborhood_size, n = 20)) %>%
+  mutate(language = 'Mandarin') %>%
+  select(num_sylls_est, normalized_surprisal, surprisal_lstm, 
+         heldout_surprisal, binned_neighorhood_size,
+         num_homophones, k, frequency, binned_frequency, delta, language)
+
+
+df_all_lexica = df_merged_english_f %>%
+  rbind(df_merged_dutch_f) %>%
+  rbind(df_merged_german_f) %>%
+  rbind(df_french_f) %>%
+  rbind(df_japanese_f) %>%
+  rbind(df_mandarin_cld_f) 
+  
+
+```
+
+
+## Visualize relationships
+
+```{r}
+
+PlotTheme = theme(
+  axis.title.x = element_text(size = 16),
+  axis.text.x = element_text(size = 14),
+  axis.text.y = element_text(size = 14),
+  axis.title.y = element_text(size = 16),
+  strip.text.x = element_text(size = 16),
+  title = element_text(size = 16),
+  legend.text = element_text(size = 16),
+  legend.title = element_text(size = 16))
+
+
+df_all_lexica %>%
+  ggplot(aes(x = heldout_surprisal,
+             y = surprisal_lstm)) +
+  geom_point(alpha = .05) +
+  geom_smooth(method = "lm") +
+  theme_bw() +
+  labs(x = "Surprisal (N-phone)",
+       y = "Surprisal (LSTM)") +
+  # scale_x_continuous(limits = c(0, max(df_all_lexica$surprisal_lstm))) +
+  # scale_y_continuous(limits = c(0, max(df_all_lexica$surprisal_lstm))) +
+  facet_wrap(~language)
+
+# ggsave("../Figures/surprisal_comparison.png", dpi = 300)
+
+## Correlation coefficients 
+df_all_lexica %>%
+  group_by(language) %>%
+  summarise(r = cor(heldout_surprisal, surprisal_lstm))
+
+df_all_lexica %>%
+  group_by(binned_frequency, language) %>%
+  summarise(mean_delta = mean(delta),
+            se_delta = sd(delta) / sqrt(n())) %>%
+  ggplot(aes(x = binned_frequency,
+             y = mean_delta)) +
+  geom_point(stat = "identity", size = .2) +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  geom_errorbar(aes(ymin = mean_delta - 2 * se_delta, 
+                    ymax = mean_delta + 2 *se_delta), 
+                width=.2,
+                position=position_dodge(.9)) +
+  labs(x = "Binned Frequency",
+       y = "Delta (Real - Expected)") +
+  geom_smooth() +
+  theme_bw() +
+  facet_wrap(~language) +
+  PlotTheme
+
+# ggsave("../Figures/lstm_delta.png", dpi = 300)
+
+df_all_lexica %>%
+  mutate(Baseline = k,
+         Real = num_homophones) %>%
+  pivot_longer(c(Baseline, Real), 
+               names_to = "Lexicon", 
+               values_to = "homophones") %>%
+  group_by(binned_frequency, language, Lexicon) %>%
+  summarise(mean_homophones = mean(homophones),
+            se_homophones = sd(homophones) / sqrt(n())) %>%
+  ggplot(aes(x = binned_frequency,
+             y = mean_homophones,
+             color = Lexicon)) +
+  geom_point(stat = "identity", size = .5, alpha = .5) +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  geom_errorbar(aes(ymin = mean_homophones - 2 * se_homophones, 
+                    ymax = mean_homophones + 2 * se_homophones), 
+                width=.2) +
+  labs(x = "Binned Frequency",
+       y = "Number of Homophones") +
+  geom_smooth(alpha = .6) +
+  theme_bw() +
+  facet_wrap(~language) +
+  PlotTheme +
+  theme(panel.spacing.x = unit(1.5, "lines"))
+
+# ggsave("../Figures/s1_frequency.png", dpi = 300)
+
+df_all_lexica %>%
+  mutate(Baseline = k,
+         Real = num_homophones) %>%
+  pivot_longer(c(Baseline, Real), 
+               names_to = "Lexicon", 
+               values_to = "homophones") %>%
+  group_by(binned_neighorhood_size, language, Lexicon) %>%
+  summarise(mean_homophones = mean(homophones),
+            se_homophones = sd(homophones) / sqrt(n())) %>%
+  ggplot(aes(x = binned_neighorhood_size,
+             y = mean_homophones,
+             color = Lexicon)) +
+  geom_point(stat = "identity", size = .5, alpha = .5) +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  geom_errorbar(aes(ymin = mean_homophones - 2 * se_homophones, 
+                    ymax = mean_homophones + 2 * se_homophones), 
+                width=.2) +
+  labs(x = "Binned Neighborhood Size",
+       y = "Number of Homophones") +
+  geom_smooth(alpha = .6) +
+  theme_bw() +
+  facet_wrap(~language) +
+  PlotTheme +
+  theme(panel.spacing.x = unit(1.5, "lines"))
+
+# ggsave("../Figures/lstm_direct_comparison_neighbors.png", dpi = 300)
+
+
+```
+
+## Visualize coefficients
+
+```{r}
+
+return_regression_table = function(df) {
+  # Build full model
+  model_full = lm(data = df,
+                  delta ~ frequency + num_sylls_est + normalized_surprisal)
+  # Tidy model output
+  df_model = broom::tidy(model_full)
+  df_model
+}
+
+### Get coefficients for each language
+english_coefficients = df_merged_english_f %>% 
+  return_regression_table() %>%
+  mutate(language = 'English')
+
+dutch_coefficients = df_merged_dutch_f %>% 
+  return_regression_table() %>%
+  mutate(language = 'Dutch')
+
+german_coefficients = df_merged_german_f %>% 
+  return_regression_table() %>%
+  mutate(language = 'German')
+
+french_coefficients = df_french_f %>% 
+  return_regression_table() %>%
+  mutate(language = 'French')
+
+japanese_coefficients = df_japanese_f %>% 
+  return_regression_table() %>%
+  mutate(language = 'Japanese')
+
+mandarin_coefficients = df_mandarin_cld_f %>% 
+  return_regression_table() %>%
+  mutate(language = 'Mandarin')
+
+# Combine into single dataframe
+df_all_coefficients = english_coefficients %>%
+  rbind(dutch_coefficients) %>%
+  rbind(german_coefficients) %>%
+  rbind(french_coefficients) %>%
+  rbind(japanese_coefficients) %>%
+  rbind(mandarin_coefficients) 
+
+
+df_all_coefficients$predictor = fct_recode(
+  df_all_coefficients$term,
+  "Number of Syllables" = "num_sylls_est",
+  "Normalized Surprisal" = "normalized_surprisal",
+  "Log(Frequency)" = "frequency"
+)
+
+
+### Plots outcome of regression
+df_all_coefficients %>%
+  filter(predictor != "(Intercept)") %>%
+  ggplot(aes(x = language,
+             y = estimate)) +
+  geom_point() +
+  coord_flip() +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  geom_errorbar(aes(ymin = estimate - 2*std.error, 
+                    ymax = estimate + 2*std.error), 
+                width=.2,
+                position=position_dodge(.9)) +
+  labs(x = "Predictor",
+       y = "Estimate") +
+  theme_bw() +
+  facet_wrap(~predictor) +
+  PlotTheme
+
+### Save to figure
+# ggsave("../Figures/s2_coefficients.png", dpi = 300)
+
+
+```
+
+
