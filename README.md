@@ -55,7 +55,7 @@ Of these, the key file for the primary analysis is the **holdout** file.
 
 ### Frequency data
 
-Each critical analysis also depends on a file containing **frequency data** for each wordform in that language.
+The critical analyses for English/German/Dutch also depends on a file containing **frequency data** for each wordform in that language.
 
 These files can be found in `data/frequency`, under the corresponding language directory.
 
