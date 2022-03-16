@@ -1,4 +1,4 @@
-"""Code to preprocess lexica and calculate surprisal."""
+"""Code to preprocess lexica, calculate surprisal, and save new dataframe."""
 
 
 import argparse
